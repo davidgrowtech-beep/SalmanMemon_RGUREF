@@ -270,18 +270,43 @@ src="https://www.facebook.com/tr?id=1056730343811883&ev=PageView&noscript=1"
 (function(){
   "use strict";
 
+  var PIXEL_ID = "1056730343811883";
   var TELEGRAM_URL = "https://t.me/+WAhbeUCUq4c4Y2I1";
-  var SESSION_KEY = "smse_subscribe_fired_v1";
-  var MIN_DWELL_MS = 1500;
+  var SESSION_KEY = "smse_subscribe_fired_" + PIXEL_ID;
+  var LOCAL_KEY = "smse_subscribe_lock_" + PIXEL_ID; // survives across tabs/reloads on same device
+  var MIN_DWELL_MS = 4000;     // was 1500 — bumped up, real readers dwell longer than bots/misclicks
+  var REQUIRED_SIGNALS = 2;    // needs at least 2 distinct human-like signals, not just 1
 
   var pageLoadTime = Date.now();
-  var hasRealInteraction = false;
+  var signals = { scroll:false, touch:false, move:false, key:false, orient:false, focusBlur:false };
+  var signalCount = 0;
+  var pointerMoveCount = 0;
 
-  // --- Bot / genuine-interaction signal ---
-  function markInteraction(){ hasRealInteraction = true; }
-  ["scroll","touchstart","mousemove","keydown"].forEach(function(evt){
-    window.addEventListener(evt, markInteraction, {passive:true, once:true});
-  });
+  function addSignal(name){
+    if(!signals[name]){ signals[name] = true; signalCount++; }
+  }
+
+  // --- Human-interaction signals (bots/click-farms rarely fire more than one of these) ---
+  window.addEventListener("scroll", function(){ addSignal("scroll"); }, {passive:true});
+  window.addEventListener("keydown", function(){ addSignal("key"); }, {passive:true});
+  window.addEventListener("touchstart", function(){ addSignal("touch"); }, {passive:true});
+  window.addEventListener("deviceorientation", function(){ addSignal("orient"); }, {passive:true, once:true});
+  window.addEventListener("mousemove", function(){
+    pointerMoveCount++;
+    if(pointerMoveCount > 3){ addSignal("move"); } // a couple of stray coords isn't a human, sustained movement is
+  }, {passive:true});
+  window.addEventListener("blur", function(){ addSignal("focusBlur"); }, {passive:true});
+
+  // --- Basic automation / headless detection ---
+  function looksAutomated(){
+    try{
+      if(navigator.webdriver) return true;
+      var ua = navigator.userAgent || "";
+      if(/HeadlessChrome|PhantomJS|Puppeteer|Selenium/i.test(ua)) return true;
+      if(navigator.plugins && navigator.plugins.length === 0 && !isIOS() && !isAndroid()) return true;
+    }catch(err){}
+    return false;
+  }
 
   // --- Facebook / Instagram in-app browser detection ---
   function isInAppBrowser(){
@@ -317,18 +342,27 @@ src="https://www.facebook.com/tr?id=1056730343811883&ev=PageView&noscript=1"
     }
   });
 
-  // --- Fire Subscribe once, only for plausible-genuine clicks, without delaying navigation ---
+  // --- Fire Subscribe once, only for strongly plausible-genuine clicks, without delaying navigation ---
   var joinBtn = document.getElementById("joinBtn");
   if(joinBtn){
     joinBtn.addEventListener("click", function(e){
       var dwell = Date.now() - pageLoadTime;
-      var alreadyFired = false;
-      try{ alreadyFired = sessionStorage.getItem(SESSION_KEY) === "1"; }catch(err){}
 
-      var looksGenuine = e.isTrusted && hasRealInteraction && dwell >= MIN_DWELL_MS;
+      var alreadyFiredSession = false, alreadyFiredLocal = false;
+      try{ alreadyFiredSession = sessionStorage.getItem(SESSION_KEY) === "1"; }catch(err){}
+      try{ alreadyFiredLocal = localStorage.getItem(LOCAL_KEY) === "1"; }catch(err){}
+      var alreadyFired = alreadyFiredSession || alreadyFiredLocal;
+
+      var looksGenuine =
+        e.isTrusted &&
+        !looksAutomated() &&
+        document.hasFocus() &&
+        signalCount >= REQUIRED_SIGNALS &&
+        dwell >= MIN_DWELL_MS;
 
       if(looksGenuine && !alreadyFired){
         try{ sessionStorage.setItem(SESSION_KEY, "1"); }catch(err){}
+        try{ localStorage.setItem(LOCAL_KEY, "1"); }catch(err){}
         if(typeof fbq === "function"){
           fbq('track', 'Subscribe', {
             content_name: 'Salman Memon Skill Education',
